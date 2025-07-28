@@ -23,6 +23,14 @@ impl Cell {
         Cell::Text(content.to_string())
     }
 
+    pub fn save(&self, content: &mut String) {
+        match self {
+            Cell::Text(text) => content.push_str(text.as_str()),
+            Cell::Num(val) => content.push_str(&format!("{val}")),
+            Cell::Formula(_) => content.push_str("=?"),
+        }
+    }
+
     pub fn render(&self, frame: &mut ratatui::Frame, cell_area: ratatui::layout::Rect) {
         use ratatui::style::Stylize;
 
@@ -42,7 +50,7 @@ impl Cell {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct CellIndex {
     pub x: u64,
     pub y: u64,
@@ -53,26 +61,27 @@ impl CellIndex {
         CellIndex { x, y }
     }
 
-    pub fn format_column(&self) -> String {
-        let mut digits = Vec::new();
-        let mut value = self.x;
-
-        if value == 0 {
-            digits.push('A');
-        } else {
-            while value > 0 {
-                // SAFTEY: safe to unwrap because the mod keeps us in 0:25 range
-                let digit = u8::try_from(value % 26).unwrap();
-                digits.push(char::from(digit));
-                value /= 26;
-            }
-        }
-
-        digits.into_iter().rev().collect::<String>()
+    pub fn alternate_color_index(&self) -> usize {
+        usize::try_from((self.x + self.y) % 2).unwrap()
     }
+}
 
-    pub fn format_row(&self) -> String {
-        format!("{}", self.y)
+impl PartialOrd for CellIndex {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(match self.y.cmp(&other.y) {
+            std::cmp::Ordering::Less => std::cmp::Ordering::Less,
+            std::cmp::Ordering::Greater => std::cmp::Ordering::Greater,
+            std::cmp::Ordering::Equal => self.x.cmp(&other.x),
+        })
+    }
+}
+impl Ord for CellIndex {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        match self.y.cmp(&other.y) {
+            std::cmp::Ordering::Less => std::cmp::Ordering::Less,
+            std::cmp::Ordering::Greater => std::cmp::Ordering::Greater,
+            std::cmp::Ordering::Equal => self.x.cmp(&other.x),
+        }
     }
 }
 
@@ -111,4 +120,24 @@ impl From<ratatui::layout::Rect> for CellRect {
             height: u64::from(value.height),
         }
     }
+}
+
+pub fn format_column(col: u64) -> String {
+    let mut index = col;
+    let mut column = String::new();
+
+    index += 1; // Shift to 1-based (Excel is 1-indexed)
+
+    while index > 0 {
+        index -= 1;
+        let ch = (b'A' + (index % 26) as u8) as char;
+        column.insert(0, ch);
+        index /= 26;
+    }
+
+    column
+}
+
+pub fn format_row(row: u64) -> String {
+    format!("{}", row + 1)
 }

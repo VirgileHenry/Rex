@@ -1,7 +1,7 @@
 use crate::file::cell;
 
 pub struct FileViewport {
-    pub cell_width: u16,
+    pub cell_size: ratatui::layout::Size,
     pub area: ratatui::layout::Rect,
     pub top_left: cell::CellIndex,
     pub selection: Option<cell::CellRect>,
@@ -11,7 +11,7 @@ impl FileViewport {
     /// Creates a new viewport from the given screen rect area.
     pub fn new(area: ratatui::layout::Rect) -> FileViewport {
         FileViewport {
-            cell_width: 12,
+            cell_size: ratatui::layout::Size::new(12, 1),
             area,
             top_left: cell::CellIndex::new(0, 0),
             selection: None,
@@ -49,10 +49,10 @@ impl FileViewport {
     /// we are allowed to draw the cells, without the axis.
     pub fn grid_area(&self) -> ratatui::layout::Rect {
         ratatui::layout::Rect::new(
-            self.area.x.saturating_add(self.cell_width),
-            self.area.y.saturating_add(1),
-            self.area.width.saturating_sub(self.cell_width),
-            self.area.height.saturating_sub(1),
+            self.area.x.saturating_add(self.cell_size.width),
+            self.area.y.saturating_add(self.cell_size.height),
+            self.area.width.saturating_sub(self.cell_size.width),
+            self.area.height.saturating_sub(self.cell_size.height),
         )
     }
 
@@ -66,8 +66,8 @@ impl FileViewport {
         if grid_rect.contains(screen_pos) {
             let grid_x = screen_pos.x.checked_sub(grid_rect.x)?;
             let grid_y = screen_pos.y.checked_sub(grid_rect.y)?;
-            let cell_x = grid_x / self.cell_width;
-            let cell_y = grid_y / 1;
+            let cell_x = grid_x / self.cell_size.width;
+            let cell_y = grid_y / self.cell_size.height;
             Some(cell::CellIndex::new(
                 u64::from(cell_x).saturating_add(self.top_left.x),
                 u64::from(cell_y).saturating_add(self.top_left.y),
@@ -82,28 +82,61 @@ impl FileViewport {
         &self,
         cells: crate::file::cell::CellRect,
     ) -> ratatui::layout::Rect {
-        let start_x = cells.x.saturating_sub(self.top_left.x);
-        let start_y = cells.y.saturating_sub(self.top_left.y);
-        let end_x = cells
-            .x
-            .saturating_add(cells.width)
-            .saturating_sub(self.top_left.x);
-        let end_y = cells
-            .y
-            .saturating_add(cells.height)
-            .saturating_sub(self.top_left.y);
-        ratatui::layout::Rect::new(
-            u16::try_from(start_x).unwrap_or(u16::MAX),
-            u16::try_from(start_y).unwrap_or(u16::MAX),
-            u16::try_from(end_x.saturating_sub(start_x)).unwrap_or(u16::MAX),
-            u16::try_from(end_y.saturating_sub(start_y)).unwrap_or(u16::MAX),
-        )
+        use crate::utils::u64_to_u16;
+
+        let start_x = u64_to_u16(
+            cells
+                .x
+                .saturating_add(1)
+                .saturating_sub(self.top_left.x)
+                .saturating_mul(u64::from(self.cell_size.width)),
+        ) + self.area.x;
+        let end_x = start_x + u64_to_u16(cells.width) * self.cell_size.width;
+
+        let start_y = u64_to_u16(
+            cells
+                .y
+                .saturating_add(1)
+                .saturating_sub(self.top_left.y)
+                .saturating_mul(u64::from(self.cell_size.height)),
+        ) + self.area.y;
+        let end_y = start_y + u64_to_u16(cells.height) * self.cell_size.height;
+
+        let cells_rect = ratatui::layout::Rect::new(
+            start_x,
+            start_y,
+            end_x.saturating_sub(start_x),
+            end_y.saturating_sub(start_y),
+        );
+
+        cells_rect.intersection(self.grid_area())
     }
 
-    pub fn handle_viewport_control_event(
-        &mut self,
-        event: crossterm::event::Event,
-    ) -> Option<super::command::Command> {
+    fn keep_selection_in_view(&mut self) {
+        if let Some(selection) = self.selection {
+            self.top_left.x = self.top_left.x.min(selection.x);
+            self.top_left.x = self.top_left.x.max(
+                selection
+                    .x
+                    .saturating_add(1)
+                    .saturating_add(selection.width)
+                    .saturating_sub(u64::from(self.area.width / self.cell_size.width)),
+            );
+            self.top_left.y = self.top_left.y.min(selection.y);
+            self.top_left.y = self.top_left.y.max(
+                selection
+                    .y
+                    .saturating_add(1)
+                    .saturating_add(selection.height)
+                    .saturating_sub(u64::from(self.area.height)),
+            );
+        }
+    }
+}
+
+impl crate::event::EventHandler for FileViewport {
+    type EventResponse = Option<super::command::Command>;
+    fn handle_event(&mut self, event: crossterm::event::Event) -> Self::EventResponse {
         use crossterm::event::Event;
         use crossterm::event::MouseEventKind;
         use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
@@ -212,9 +245,9 @@ impl FileViewport {
                             match &mut self.selection {
                                 Some(selection) => {
                                     selection.width =
-                                        cell.x.saturating_add(1).saturating_sub(selection.x);
+                                        cell.x.saturating_add(1).saturating_sub(selection.x).max(1);
                                     selection.height =
-                                        cell.y.saturating_add(1).saturating_sub(selection.y);
+                                        cell.y.saturating_add(1).saturating_sub(selection.y).max(1);
                                 }
                                 None => {
                                     let selected_rect = cell::CellRect::new(cell.x, cell.y, 1, 1);
@@ -245,27 +278,6 @@ impl FileViewport {
                 _ => None,
             },
             _ => None,
-        }
-    }
-
-    fn keep_selection_in_view(&mut self) {
-        if let Some(selection) = self.selection {
-            self.top_left.x = self.top_left.x.min(selection.x);
-            self.top_left.x = self.top_left.x.max(
-                selection
-                    .x
-                    .saturating_add(1)
-                    .saturating_add(selection.width)
-                    .saturating_sub(u64::from(self.area.width / self.cell_width)),
-            );
-            self.top_left.y = self.top_left.y.min(selection.y);
-            self.top_left.y = self.top_left.y.max(
-                selection
-                    .y
-                    .saturating_add(1)
-                    .saturating_add(selection.height)
-                    .saturating_sub(u64::from(self.area.height)),
-            );
         }
     }
 }

@@ -15,7 +15,7 @@ const CELL_STYLE: [ratatui::style::Color; 2] = [
     ratatui::style::Color::Indexed(233),
     ratatui::style::Color::Indexed(234),
 ];
-const SELECTED: ratatui::style::Color = ratatui::style::Color::Indexed(28);
+const SELECTED: ratatui::style::Color = ratatui::style::Color::Indexed(62);
 
 /// App state for an opened file.
 pub struct FileApp {
@@ -62,24 +62,25 @@ impl FileApp {
         Ok(result)
     }
 
-    pub fn handle_event(&mut self, event: crossterm::event::Event) -> bool {
-        let mut redraw_requested = false;
+    pub fn save(&self) -> std::io::Result<()> {
+        let mut content = String::new();
 
-        let command_result = self.viewport.handle_viewport_control_event(event.clone());
-        if let Some(cmd) = command_result {
-            self.execute_command(cmd);
-            redraw_requested = true;
+        let mut last_index = cell::CellIndex::new(0, 0);
+        for (index, cell) in self.content.iter() {
+            for _empty_row in last_index.y..index.y {
+                content.push('\n');
+                last_index.x = 0;
+            }
+            for _empty_col in last_index.x..index.x {
+                content.push(';');
+            }
+            cell.save(&mut content);
+            last_index = *index;
         }
 
-        let command_result = self
-            .state
-            .handle_event(event.clone(), self.viewport.selection);
-        if let Some(cmd) = command_result {
-            self.execute_command(cmd);
-            redraw_requested = true;
-        }
+        std::fs::write(&self.path, &content)?;
 
-        redraw_requested
+        Ok(())
     }
 
     pub fn execute_command(&mut self, cmd: command::Command) {
@@ -127,19 +128,19 @@ impl FileApp {
         let top_left_area = area.intersection(ratatui::layout::Rect::new(
             area.x,
             area.y,
-            self.viewport.cell_width,
-            1,
+            self.viewport.cell_size.width,
+            self.viewport.cell_size.height,
         ));
         let top_left_block = ratatui::widgets::Block::new().bg(TOP_LEFT);
         frame.render_widget(top_left_block, top_left_area);
 
         let start_cell_x = self.viewport.top_left.x;
-        let end_cell_x = start_cell_x + u64::from(area.width / self.viewport.cell_width);
+        let end_cell_x = start_cell_x + u64::from(area.width / self.viewport.cell_size.width);
         let x_axis_rect = Rect::new(
-            area.x + self.viewport.cell_width,
+            area.x.saturating_add(self.viewport.cell_size.width),
             area.y,
-            area.width - self.viewport.cell_width,
-            1,
+            area.width.saturating_sub(self.viewport.cell_size.width),
+            self.viewport.cell_size.height,
         );
         self.render_x_axis(start_cell_x..end_cell_x, frame, x_axis_rect);
 
@@ -147,34 +148,22 @@ impl FileApp {
         let end_cell_y = start_cell_y + u64::from(area.height.saturating_sub(1));
         let y_axis_rect = Rect::new(
             area.x,
-            area.y + 1,
-            self.viewport.cell_width,
-            area.height - 1,
+            area.y.saturating_add(self.viewport.cell_size.height),
+            self.viewport.cell_size.width,
+            area.height.saturating_sub(self.viewport.cell_size.height),
         );
         self.render_y_axis(start_cell_y..end_cell_y, frame, y_axis_rect);
 
-        let cells_area = Rect::new(
-            area.x + self.viewport.cell_width,
-            area.y + 1,
-            area.width.saturating_sub(1),
-            area.height.saturating_sub(1),
-        );
-
-        for (y, cell_y) in (start_cell_y..end_cell_y).enumerate() {
-            for (x, cell_x) in (start_cell_x..end_cell_x).enumerate() {
-                let cell_area = area.intersection(ratatui::layout::Rect::new(
-                    cells_area.x + u16::try_from(x).unwrap_or(u16::MAX) * self.viewport.cell_width,
-                    cells_area.y + u16::try_from(y).unwrap_or(u16::MAX),
-                    self.viewport.cell_width,
-                    1,
-                ));
+        for cell_y in start_cell_y..end_cell_y {
+            for cell_x in start_cell_x..end_cell_x {
+                let cells = cell::CellRect::new(cell_x, cell_y, 1, 1);
+                let cell_area = self.viewport.cells_pos_to_screen_pos(cells);
 
                 let cell_index = cell::CellIndex::new(cell_x, cell_y);
                 let bg_style = if self.viewport.is_selected(cell_index) {
                     SELECTED
                 } else {
-                    // SAFETY: safe to unwrap because the mod keeps us in 0, 2
-                    CELL_STYLE[usize::try_from((cell_x + cell_y) % 2).unwrap()]
+                    CELL_STYLE[cell_index.alternate_color_index()]
                 };
                 frame.render_widget(ratatui::widgets::Block::new().bg(bg_style), cell_area);
 
@@ -185,7 +174,10 @@ impl FileApp {
             }
         }
 
-        self.state.render(&self.viewport, frame, area);
+        match &self.state {
+            state::State::Idle => {}
+            state::State::Editing(editor) => editor.render(&self.viewport, frame),
+        }
     }
 
     fn render_x_axis(
@@ -196,20 +188,24 @@ impl FileApp {
     ) {
         use ratatui::style::Stylize;
 
-        for (x, cell) in cells.enumerate() {
+        for (x, cell_index) in cells.enumerate() {
             let cell_area = axis_area.intersection(ratatui::layout::Rect::new(
-                axis_area.x + u16::try_from(x).unwrap_or(u16::MAX) * self.viewport.cell_width,
+                axis_area.x.saturating_add(
+                    u16::try_from(x)
+                        .unwrap_or(u16::MAX)
+                        .saturating_mul(self.viewport.cell_size.width),
+                ),
                 axis_area.y,
-                self.viewport.cell_width,
-                1,
+                self.viewport.cell_size.width,
+                self.viewport.cell_size.height,
             ));
-            let bg_style = if self.viewport.is_selected_x(u64::from(cell)) {
+            let bg_style = if self.viewport.is_selected_x(u64::from(cell_index)) {
                 SELECTED
             } else {
-                // SAFTEY: safe to unwrap, we are in the 0-2 range
-                AXIS_STYLE[usize::try_from(cell % 2).unwrap()]
+                AXIS_STYLE[usize::try_from(cell_index % 2).unwrap()]
             };
-            let text = ratatui::widgets::Paragraph::new(format!("{cell}"))
+            let cell_text = cell::format_column(cell_index);
+            let text = ratatui::widgets::Paragraph::new(cell_text.as_str())
                 .centered()
                 .bg(bg_style)
                 .fg(ratatui::style::Color::Black);
@@ -225,24 +221,105 @@ impl FileApp {
     ) {
         use ratatui::style::Stylize;
 
-        for (y, cell) in cells.enumerate() {
+        for (y, cell_index) in cells.enumerate() {
             let cell_area = axis_area.intersection(ratatui::layout::Rect::new(
                 axis_area.x,
-                axis_area.y + u16::try_from(y).unwrap_or(u16::MAX),
-                self.viewport.cell_width,
-                1,
+                axis_area.y.saturating_add(
+                    u16::try_from(y)
+                        .unwrap_or(u16::MAX)
+                        .saturating_mul(self.viewport.cell_size.height),
+                ),
+                self.viewport.cell_size.width,
+                self.viewport.cell_size.height,
             ));
-            let bg_style = if self.viewport.is_selected_y(u64::from(cell)) {
+            let bg_style = if self.viewport.is_selected_y(u64::from(cell_index)) {
                 SELECTED
             } else {
-                // SAFTEY: safe to unwrap, we are in the 0-2 range
-                AXIS_STYLE[usize::try_from(cell % 2).unwrap()]
+                AXIS_STYLE[usize::try_from(cell_index % 2).unwrap()]
             };
-            let text = ratatui::widgets::Paragraph::new(format!("{cell}"))
+            let cell_text = cell::format_row(cell_index);
+            let text = ratatui::widgets::Paragraph::new(cell_text)
                 .centered()
                 .bg(bg_style)
                 .fg(ratatui::style::Color::Black);
             frame.render_widget(text, cell_area);
         }
+    }
+}
+
+impl crate::event::EventHandler for FileApp {
+    /// If we request the redraw or not after an event
+    type EventResponse = bool;
+    fn handle_event(&mut self, event: crossterm::event::Event) -> Self::EventResponse {
+        use crossterm::event::Event;
+        use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
+
+        let mut redraw_requested = false;
+
+        let command_result = match &mut self.state {
+            state::State::Idle => match (event, self.viewport.selection) {
+                (
+                    Event::Key(KeyEvent {
+                        kind: KeyEventKind::Press,
+                        code: KeyCode::Char('s'),
+                        modifiers: KeyModifiers::CONTROL,
+                        ..
+                    }),
+                    _,
+                ) => {
+                    _ = self.save();
+                    None
+                }
+                // when cells are selected and we press any writing chars, enter editing
+                (
+                    Event::Key(KeyEvent {
+                        kind: KeyEventKind::Press,
+                        code: KeyCode::Char(opening_char),
+                        modifiers,
+                        ..
+                    }),
+                    Some(cells),
+                ) => {
+                    if !modifiers.contains(KeyModifiers::CONTROL) {
+                        self.state =
+                            state::State::Editing(state::EditingState::new(cells, opening_char));
+                        Some(command::Command::RedrawRequest)
+                    } else {
+                        None
+                    }
+                }
+                // cells selected and supr / backspace, delete selected cells
+                (
+                    Event::Key(KeyEvent {
+                        kind: KeyEventKind::Press,
+                        code: KeyCode::Delete | KeyCode::Backspace,
+                        ..
+                    }),
+                    Some(cells),
+                ) => Some(command::Command::DeleteCells {
+                    cells,
+                    next_selection: Some(cells),
+                }),
+
+                // Lastly, we can redirect the event to the viewport control
+                (other, _) => self.viewport.handle_event(other),
+            },
+            state::State::Editing(editor) => match editor.handle_event(event) {
+                Some(response) => {
+                    if response.exit {
+                        self.state = state::State::Idle;
+                    }
+                    Some(response.command)
+                }
+                None => None,
+            },
+        };
+
+        if let Some(cmd) = command_result {
+            self.execute_command(cmd);
+            redraw_requested = true;
+        }
+
+        redraw_requested
     }
 }

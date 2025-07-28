@@ -1,6 +1,3 @@
-mod input;
-mod prompt;
-
 /// Main application.
 pub struct App {
     last_command: String,
@@ -78,7 +75,10 @@ impl App {
                         _ => { /* unhandled! */ }
                     }
                     match &mut self.file {
-                        Some(file) => redraw_requested |= file.handle_event(event),
+                        Some(file) => {
+                            use crate::event::EventHandler;
+                            redraw_requested |= file.handle_event(event)
+                        }
                         None => {}
                     }
                 }

@@ -1,6 +1,8 @@
 mod app;
 mod args;
+mod event;
 mod file;
+mod utils;
 mod widgets;
 
 fn setup_terminal(support_enhancement: bool, stdout: &mut std::io::Stdout) -> std::io::Result<()> {
