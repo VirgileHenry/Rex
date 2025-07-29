@@ -4,10 +4,10 @@ pub struct EditingState {
 }
 
 impl EditingState {
-    pub fn new(cells: crate::file::cell::CellRect, opening_char: char) -> EditingState {
+    pub fn new(cells: crate::file::cell::CellRect, opening_chars: &str) -> EditingState {
         EditingState {
             cells,
-            buffer: crate::file::input_buffer::InputBuffer::new(opening_char),
+            buffer: crate::file::input_buffer::InputBuffer::new(opening_chars),
         }
     }
 
@@ -16,9 +16,24 @@ impl EditingState {
         viewport: &crate::file::viewport::FileViewport,
         frame: &mut ratatui::Frame,
     ) {
+        use crate::utils::usize_to_u16;
         use ratatui::style::Stylize;
 
-        let text_rect = viewport.cells_pos_to_screen_pos(self.cells);
+        let cells_rect = viewport.cells_pos_to_screen_pos(self.cells);
+        let text_width = cells_rect
+            .width
+            .max(usize_to_u16(self.buffer.required_width()));
+        let text_height = cells_rect
+            .height
+            .max(usize_to_u16(self.buffer.required_height()));
+        let text_rect = viewport
+            .grid_area()
+            .intersection(ratatui::layout::Rect::new(
+                cells_rect.x,
+                cells_rect.y,
+                text_width,
+                text_height,
+            ));
         let contour_rect = viewport
             .grid_area()
             .intersection(ratatui::layout::Rect::new(
@@ -47,8 +62,12 @@ pub struct EditingStateEventResponse {
 
 impl crate::event::EventHandler for EditingState {
     type EventResponse = Option<EditingStateEventResponse>;
-    fn handle_event(&mut self, event: crossterm::event::Event) -> Self::EventResponse {
-        use crate::file::command::Command;
+    fn handle_event(
+        &mut self,
+        event: crossterm::event::Event,
+        _: &mut String,
+    ) -> Self::EventResponse {
+        use crate::file::command::{Command, SelectionDirection};
         use crossterm::event::Event;
         use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 
@@ -112,6 +131,13 @@ impl crate::event::EventHandler for EditingState {
                     exit: false,
                 })
             }
+            Event::Paste(pasted_value) => {
+                pasted_value.chars().for_each(|ch| self.buffer.push(ch));
+                Some(EditingStateEventResponse {
+                    command: Command::RedrawRequest,
+                    exit: false,
+                })
+            }
             Event::Key(KeyEvent {
                 kind: KeyEventKind::Press,
                 code: KeyCode::Esc,
@@ -125,18 +151,12 @@ impl crate::event::EventHandler for EditingState {
                 code: KeyCode::Enter,
                 ..
             }) => {
-                let next_selection = crate::file::cell::CellRect::new(
-                    self.cells.x,
-                    self.cells.y + self.cells.height,
-                    self.cells.width,
-                    self.cells.height,
-                );
                 let buffer = self.buffer.string();
                 Some(EditingStateEventResponse {
                     command: Command::WriteCells {
                         cells: self.cells,
                         content: crate::file::cell::Cell::parse(&buffer),
-                        next_selection: Some(next_selection),
+                        next_selection: SelectionDirection::Return,
                     },
                     exit: true,
                 })
@@ -146,18 +166,12 @@ impl crate::event::EventHandler for EditingState {
                 code: KeyCode::Tab,
                 ..
             }) => {
-                let next_selection = crate::file::cell::CellRect::new(
-                    self.cells.x + self.cells.width,
-                    self.cells.y,
-                    self.cells.width,
-                    self.cells.height,
-                );
                 let buffer = self.buffer.string();
                 Some(EditingStateEventResponse {
                     command: Command::WriteCells {
                         cells: self.cells,
                         content: crate::file::cell::Cell::parse(&buffer),
-                        next_selection: Some(next_selection),
+                        next_selection: SelectionDirection::Next,
                     },
                     exit: true,
                 })

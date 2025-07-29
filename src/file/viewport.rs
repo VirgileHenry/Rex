@@ -1,3 +1,5 @@
+use std::u64;
+
 use crate::file::cell;
 
 pub struct FileViewport {
@@ -91,7 +93,8 @@ impl FileViewport {
                 .saturating_sub(self.top_left.x)
                 .saturating_mul(u64::from(self.cell_size.width)),
         ) + self.area.x;
-        let end_x = start_x + u64_to_u16(cells.width) * self.cell_size.width;
+        let end_x =
+            start_x.saturating_add(u64_to_u16(cells.width).saturating_mul(self.cell_size.width));
 
         let start_y = u64_to_u16(
             cells
@@ -100,7 +103,8 @@ impl FileViewport {
                 .saturating_sub(self.top_left.y)
                 .saturating_mul(u64::from(self.cell_size.height)),
         ) + self.area.y;
-        let end_y = start_y + u64_to_u16(cells.height) * self.cell_size.height;
+        let end_y =
+            start_y.saturating_add(u64_to_u16(cells.height).saturating_mul(self.cell_size.height));
 
         let cells_rect = ratatui::layout::Rect::new(
             start_x,
@@ -136,7 +140,11 @@ impl FileViewport {
 
 impl crate::event::EventHandler for FileViewport {
     type EventResponse = Option<super::command::Command>;
-    fn handle_event(&mut self, event: crossterm::event::Event) -> Self::EventResponse {
+    fn handle_event(
+        &mut self,
+        event: crossterm::event::Event,
+        info: &mut String,
+    ) -> Self::EventResponse {
         use crossterm::event::Event;
         use crossterm::event::MouseEventKind;
         use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
@@ -146,10 +154,14 @@ impl crate::event::EventHandler for FileViewport {
                 code: KeyCode::Esc,
                 kind: KeyEventKind::Press,
                 ..
-            }) => {
-                self.selection = None;
-                Some(super::command::Command::RedrawRequest)
-            }
+            }) => match self.selection {
+                Some(_) => {
+                    self.selection = None;
+                    info.clear();
+                    Some(super::command::Command::RedrawRequest)
+                }
+                None => None,
+            },
             Event::Key(KeyEvent {
                 code: KeyCode::Up,
                 kind: KeyEventKind::Press | KeyEventKind::Repeat,
@@ -163,6 +175,7 @@ impl crate::event::EventHandler for FileViewport {
                     } else {
                         selection.y = selection.y.saturating_sub(offset);
                     }
+                    *info = format!("Selected {selection} ({} cells)", selection.count());
                     self.keep_selection_in_view();
                     Some(super::command::Command::RedrawRequest)
                 } else {
@@ -182,6 +195,7 @@ impl crate::event::EventHandler for FileViewport {
                     } else {
                         selection.y = selection.y.saturating_add(offset);
                     }
+                    *info = format!("Selected {selection} ({} cells)", selection.count());
                     self.keep_selection_in_view();
                     Some(super::command::Command::RedrawRequest)
                 } else {
@@ -201,6 +215,7 @@ impl crate::event::EventHandler for FileViewport {
                     } else {
                         selection.x = selection.x.saturating_sub(offset);
                     }
+                    *info = format!("Selected {selection} ({} cells)", selection.count());
                     self.keep_selection_in_view();
                     Some(super::command::Command::RedrawRequest)
                 } else {
@@ -220,6 +235,35 @@ impl crate::event::EventHandler for FileViewport {
                     } else {
                         selection.x = selection.x.saturating_add(offset);
                     }
+                    *info = format!("Selected {selection} ({} cells)", selection.count());
+                    self.keep_selection_in_view();
+                    Some(super::command::Command::RedrawRequest)
+                } else {
+                    None
+                }
+            }
+            Event::Key(KeyEvent {
+                code: KeyCode::Tab,
+                kind: KeyEventKind::Press | KeyEventKind::Repeat,
+                ..
+            }) => {
+                if let Some(selection) = &mut self.selection {
+                    selection.x = selection.x.saturating_add(selection.width);
+                    *info = format!("Selected {selection} ({} cells)", selection.count());
+                    self.keep_selection_in_view();
+                    Some(super::command::Command::RedrawRequest)
+                } else {
+                    None
+                }
+            }
+            Event::Key(KeyEvent {
+                code: KeyCode::Enter,
+                kind: KeyEventKind::Press | KeyEventKind::Repeat,
+                ..
+            }) => {
+                if let Some(selection) = &mut self.selection {
+                    selection.y = selection.y.saturating_add(selection.height);
+                    *info = format!("Selected {selection} ({} cells)", selection.count());
                     self.keep_selection_in_view();
                     Some(super::command::Command::RedrawRequest)
                 } else {
@@ -231,8 +275,9 @@ impl crate::event::EventHandler for FileViewport {
                     let mouse_pos = ratatui::layout::Position::new(mouse.column, mouse.row);
                     match self.screen_pos_to_cell_pos(mouse_pos) {
                         Some(cell) => {
-                            let selected_rect = cell::CellRect::new(cell.x, cell.y, 1, 1);
-                            self.selection = Some(selected_rect.into());
+                            let selection = cell::CellRect::new(cell.x, cell.y, 1, 1);
+                            *info = format!("Selected {selection} ({} cells)", selection.count());
+                            self.selection = Some(selection);
                             Some(super::command::Command::RedrawRequest)
                         }
                         None => None,
@@ -248,10 +293,18 @@ impl crate::event::EventHandler for FileViewport {
                                         cell.x.saturating_add(1).saturating_sub(selection.x).max(1);
                                     selection.height =
                                         cell.y.saturating_add(1).saturating_sub(selection.y).max(1);
+                                    *info = format!(
+                                        "Selected {selection} ({} cells)",
+                                        selection.count()
+                                    );
                                 }
                                 None => {
-                                    let selected_rect = cell::CellRect::new(cell.x, cell.y, 1, 1);
-                                    self.selection = Some(selected_rect);
+                                    let selection = cell::CellRect::new(cell.x, cell.y, 1, 1);
+                                    *info = format!(
+                                        "Selected {selection} ({} cells)",
+                                        selection.count()
+                                    );
+                                    self.selection = Some(selection);
                                 }
                             }
                             Some(super::command::Command::RedrawRequest)

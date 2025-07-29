@@ -62,7 +62,7 @@ impl FileApp {
         Ok(result)
     }
 
-    pub fn save(&self) -> std::io::Result<()> {
+    pub fn save(&self) -> std::io::Result<usize> {
         let mut content = String::new();
 
         let mut last_index = cell::CellIndex::new(0, 0);
@@ -78,12 +78,13 @@ impl FileApp {
             last_index = *index;
         }
 
+        let bytes_count = content.bytes().len();
         std::fs::write(&self.path, &content)?;
 
-        Ok(())
+        Ok(bytes_count)
     }
 
-    pub fn execute_command(&mut self, cmd: command::Command) {
+    pub fn execute_command(&mut self, cmd: command::Command, info: &mut String) {
         match cmd {
             command::Command::WriteCells {
                 cells,
@@ -96,8 +97,23 @@ impl FileApp {
                         self.content.insert(key, content.clone());
                     }
                 }
-                self.viewport.selection = next_selection;
+                self.viewport.selection = match next_selection {
+                    command::SelectionDirection::Stay => Some(cells),
+                    command::SelectionDirection::Next => Some(cell::CellRect::new(
+                        cells.x.saturating_add(cells.width),
+                        cells.y,
+                        cells.width,
+                        cells.height,
+                    )),
+                    command::SelectionDirection::Return => Some(cell::CellRect::new(
+                        cells.x,
+                        cells.y.saturating_add(cells.height),
+                        cells.width,
+                        cells.height,
+                    )),
+                };
                 self.saved = false;
+                *info = format!("Wrote {cells} ({} cells)", cells.count());
             }
             command::Command::DeleteCells {
                 cells,
@@ -108,8 +124,23 @@ impl FileApp {
                         self.content.remove(&cell::CellIndex::new(cell_x, cell_y));
                     }
                 }
-                self.viewport.selection = next_selection;
+                self.viewport.selection = match next_selection {
+                    command::SelectionDirection::Stay => Some(cells),
+                    command::SelectionDirection::Next => Some(cell::CellRect::new(
+                        cells.x.saturating_add(cells.width),
+                        cells.y,
+                        cells.width,
+                        cells.height,
+                    )),
+                    command::SelectionDirection::Return => Some(cell::CellRect::new(
+                        cells.x,
+                        cells.y.saturating_add(cells.height),
+                        cells.width,
+                        cells.height,
+                    )),
+                };
                 self.saved = false;
+                *info = format!("Deleted {cells} ({} cells)", cells.count());
             }
             command::Command::RedrawRequest => { /* bubble up, but nothing to do */ }
         }
@@ -250,7 +281,11 @@ impl FileApp {
 impl crate::event::EventHandler for FileApp {
     /// If we request the redraw or not after an event
     type EventResponse = bool;
-    fn handle_event(&mut self, event: crossterm::event::Event) -> Self::EventResponse {
+    fn handle_event(
+        &mut self,
+        event: crossterm::event::Event,
+        info: &mut String,
+    ) -> Self::EventResponse {
         use crossterm::event::Event;
         use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 
@@ -267,8 +302,11 @@ impl crate::event::EventHandler for FileApp {
                     }),
                     _,
                 ) => {
-                    _ = self.save();
-                    None
+                    match self.save() {
+                        Ok(bytes) => *info = format!("Saved {bytes} bytes to {:?}", self.path),
+                        Err(e) => *info = format!("Failed to save to {:?}: {e}", self.path),
+                    }
+                    Some(command::Command::RedrawRequest)
                 }
                 // when cells are selected and we press any writing chars, enter editing
                 (
@@ -281,8 +319,33 @@ impl crate::event::EventHandler for FileApp {
                     Some(cells),
                 ) => {
                     if !modifiers.contains(KeyModifiers::CONTROL) {
+                        let mut buffer = [0u8; 4];
+                        let opening_chars = opening_char.encode_utf8(&mut buffer);
                         self.state =
-                            state::State::Editing(state::EditingState::new(cells, opening_char));
+                            state::State::Editing(state::EditingState::new(cells, opening_chars));
+                        *info = format!("Editing {cells}");
+                        Some(command::Command::RedrawRequest)
+                    } else {
+                        None
+                    }
+                }
+                (
+                    Event::Key(KeyEvent {
+                        kind: KeyEventKind::Press,
+                        code: KeyCode::Enter,
+                        ..
+                    }),
+                    Some(cells),
+                ) => {
+                    if cells.count() == 1 {
+                        let content = self
+                            .content
+                            .get(&cell::CellIndex::new(cells.x, cells.y))
+                            .map(|cell| cell.to_string())
+                            .unwrap_or(String::with_capacity(0));
+                        self.state =
+                            state::State::Editing(state::EditingState::new(cells, &content));
+                        *info = format!("Editing {cells}");
                         Some(command::Command::RedrawRequest)
                     } else {
                         None
@@ -298,13 +361,17 @@ impl crate::event::EventHandler for FileApp {
                     Some(cells),
                 ) => Some(command::Command::DeleteCells {
                     cells,
-                    next_selection: Some(cells),
+                    next_selection: command::SelectionDirection::Stay,
                 }),
+                (Event::Paste(val), Some(_cells)) => {
+                    *info = format!("Pasted {} bytes", val.bytes().len());
+                    Some(command::Command::RedrawRequest)
+                }
 
                 // Lastly, we can redirect the event to the viewport control
-                (other, _) => self.viewport.handle_event(other),
+                (other, _) => self.viewport.handle_event(other, info),
             },
-            state::State::Editing(editor) => match editor.handle_event(event) {
+            state::State::Editing(editor) => match editor.handle_event(event, info) {
                 Some(response) => {
                     if response.exit {
                         self.state = state::State::Idle;
@@ -316,7 +383,7 @@ impl crate::event::EventHandler for FileApp {
         };
 
         if let Some(cmd) = command_result {
-            self.execute_command(cmd);
+            self.execute_command(cmd, info);
             redraw_requested = true;
         }
 

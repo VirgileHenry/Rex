@@ -31,6 +31,14 @@ impl Cell {
         }
     }
 
+    pub fn to_string(&self) -> String {
+        match self {
+            Cell::Text(text) => text.clone(),
+            Cell::Num(num) => format!("{num}"),
+            Cell::Formula(_) => format!("=?"),
+        }
+    }
+
     pub fn render(&self, frame: &mut ratatui::Frame, cell_area: ratatui::layout::Rect) {
         use ratatui::style::Stylize;
 
@@ -63,6 +71,14 @@ impl CellIndex {
 
     pub fn alternate_color_index(&self) -> usize {
         usize::try_from((self.x + self.y) % 2).unwrap()
+    }
+}
+
+impl std::fmt::Display for CellIndex {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let column = format_column(self.x);
+        let row = format_row(self.y);
+        write!(f, "{column}{row}")
     }
 }
 
@@ -108,6 +124,30 @@ impl CellRect {
             && position.x < self.x + self.width
             && self.y <= position.y
             && position.y < self.y + self.height
+    }
+
+    pub fn count(&self) -> u64 {
+        self.width.saturating_mul(self.height)
+    }
+}
+
+impl std::fmt::Display for CellRect {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match (self.width, self.height) {
+            (0, _) | (_, 0) => write!(f, "Empty cell rect"),
+            (1, 1) => {
+                let cell = CellIndex::new(self.x, self.y);
+                write!(f, "{cell}")
+            }
+            (width, height) => {
+                let start = CellIndex::new(self.x, self.y);
+                let end = CellIndex::new(
+                    self.x.saturating_add(width).saturating_sub(1),
+                    self.y.saturating_add(height).saturating_sub(1),
+                );
+                write!(f, "{start}:{end}")
+            }
+        }
     }
 }
 

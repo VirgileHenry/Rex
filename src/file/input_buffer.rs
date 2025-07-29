@@ -4,10 +4,13 @@ pub struct InputBuffer {
 }
 
 impl InputBuffer {
-    pub fn new(opening_char: char) -> InputBuffer {
+    pub fn new(opening_chars: &str) -> InputBuffer {
         let mut buffer = Vec::new();
-        buffer.push(opening_char);
-        InputBuffer { buffer, cursor: 1 }
+        for ch in opening_chars.chars() {
+            buffer.push(ch);
+        }
+        let cursor = buffer.len();
+        InputBuffer { buffer, cursor }
     }
 
     pub fn push(&mut self, ch: char) {
@@ -72,6 +75,19 @@ impl InputBuffer {
 
     pub fn string(&self) -> String {
         self.buffer.iter().cloned().collect()
+    }
+
+    pub fn required_width(&self) -> usize {
+        self.buffer
+            .split(|ch| *ch == '\n')
+            .map(|subslice| subslice.len())
+            .max()
+            .unwrap_or(0)
+            + 1 // for cursor
+    }
+
+    pub fn required_height(&self) -> usize {
+        self.buffer.iter().filter(|ch| **ch == '\n').count()
     }
 
     pub fn render(&self, frame: &mut ratatui::Frame, area: ratatui::layout::Rect) {
