@@ -91,6 +91,8 @@ impl InputBuffer {
     }
 
     pub fn render(&self, frame: &mut ratatui::Frame, area: ratatui::layout::Rect) {
+        use ratatui::style::Stylize;
+
         let first_span = ratatui::text::Span::raw(
             self.buffer[0..self.cursor]
                 .iter()
@@ -114,7 +116,9 @@ impl InputBuffer {
                 .unwrap_or(String::with_capacity(0)),
         );
         let line = ratatui::text::Line::from(vec![first_span, cursor_span, ending_span]);
-        let paragraph = ratatui::widgets::Paragraph::new(line);
+        let paragraph = ratatui::widgets::Paragraph::new(line)
+            .fg(ratatui::style::Color::White)
+            .bg(ratatui::style::Color::Black);
         frame.render_widget(paragraph, area);
     }
 }

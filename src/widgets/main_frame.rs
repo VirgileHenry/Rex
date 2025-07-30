@@ -15,26 +15,48 @@ impl<'lyt> MainFrame<'lyt> {
         MainFrame { layout }
     }
 
-    fn draw_line(&self, at: u16, width: u16, sides: (char, char), buf: &mut Buffer) {
-        if let Some(cell) = buf.cell_mut((0, at)) {
+    fn draw_line(
+        &self,
+        top_left: ratatui::layout::Position,
+        at: u16,
+        width: u16,
+        sides: (char, char),
+        buf: &mut Buffer,
+    ) {
+        if let Some(cell) = buf.cell_mut((top_left.x, top_left.y.saturating_add(at))) {
             cell.set_char(sides.0);
         }
         for x in 1..width - 1 {
-            if let Some(cell) = buf.cell_mut((x, at)) {
+            if let Some(cell) =
+                buf.cell_mut((top_left.x.saturating_add(x), top_left.y.saturating_add(at)))
+            {
                 cell.set_char(HORIZONTAL);
             }
         }
-        if let Some(cell) = buf.cell_mut((width - 1, at)) {
+        if let Some(cell) = buf.cell_mut((
+            top_left.x.saturating_add(width).saturating_sub(1),
+            top_left.y.saturating_add(at),
+        )) {
             cell.set_char(sides.1);
         }
     }
 
-    fn draw_sides(&self, start: u16, end: u16, width: u16, buf: &mut Buffer) {
+    fn draw_sides(
+        &self,
+        top_left: ratatui::layout::Position,
+        start: u16,
+        end: u16,
+        width: u16,
+        buf: &mut Buffer,
+    ) {
         for y in start..end {
-            if let Some(cell) = buf.cell_mut((0, y)) {
+            if let Some(cell) = buf.cell_mut((top_left.x, top_left.y.saturating_add(y))) {
                 cell.set_char(VERTICAL);
             }
-            if let Some(cell) = buf.cell_mut((width - 1, y)) {
+            if let Some(cell) = buf.cell_mut((
+                top_left.x.saturating_add(width).saturating_sub(1),
+                top_left.y.saturating_add(y),
+            )) {
                 cell.set_char(VERTICAL);
             }
         }
@@ -42,10 +64,11 @@ impl<'lyt> MainFrame<'lyt> {
 
     fn draw_borders(&self, area: ratatui::layout::Rect, buf: &mut Buffer) {
         let mut line_height = 0;
-        self.draw_line(line_height, area.width, TOPS, buf);
+        self.draw_line(area.as_position(), line_height, area.width, TOPS, buf);
         line_height += 1;
 
         self.draw_sides(
+            area.as_position(),
             line_height,
             line_height + self.layout.top.height,
             area.width,
@@ -53,10 +76,11 @@ impl<'lyt> MainFrame<'lyt> {
         );
         line_height += self.layout.top.height;
 
-        self.draw_line(line_height, area.width, CROSSES, buf);
+        self.draw_line(area.as_position(), line_height, area.width, CROSSES, buf);
         line_height += 1;
 
         self.draw_sides(
+            area.as_position(),
             line_height,
             line_height + self.layout.content.height,
             area.width,
@@ -64,10 +88,11 @@ impl<'lyt> MainFrame<'lyt> {
         );
         line_height += self.layout.content.height;
 
-        self.draw_line(line_height, area.width, CROSSES, buf);
+        self.draw_line(area.as_position(), line_height, area.width, CROSSES, buf);
         line_height += 1;
 
         self.draw_sides(
+            area.as_position(),
             line_height,
             line_height + self.layout.footer.height,
             area.width,
@@ -75,7 +100,7 @@ impl<'lyt> MainFrame<'lyt> {
         );
         line_height += 1;
 
-        self.draw_line(line_height, area.width, BOTTOMS, buf);
+        self.draw_line(area.as_position(), line_height, area.width, BOTTOMS, buf);
     }
 }
 

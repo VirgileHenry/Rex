@@ -17,12 +17,14 @@ impl EditingState {
         frame: &mut ratatui::Frame,
     ) {
         use crate::utils::usize_to_u16;
-        use ratatui::style::Stylize;
+
+        let editor_frame = crate::widgets::Editor::new("Save: Enter/Tab", "Cancel: Esc");
 
         let cells_rect = viewport.cells_pos_to_screen_pos(self.cells);
         let text_width = cells_rect
             .width
-            .max(usize_to_u16(self.buffer.required_width()));
+            .max(usize_to_u16(self.buffer.required_width()))
+            .max(usize_to_u16(editor_frame.text_widths()));
         let text_height = cells_rect
             .height
             .max(usize_to_u16(self.buffer.required_height()));
@@ -44,13 +46,7 @@ impl EditingState {
             ));
 
         frame.render_widget(ratatui::widgets::Clear, contour_rect);
-        frame.render_widget(
-            ratatui::widgets::Block::bordered()
-                .border_type(ratatui::widgets::block::BorderType::Rounded)
-                .border_style(ratatui::style::Color::Cyan)
-                .bg(ratatui::style::Color::Black),
-            contour_rect,
-        );
+        frame.render_widget(editor_frame, contour_rect);
         self.buffer.render(frame, text_rect);
     }
 }
