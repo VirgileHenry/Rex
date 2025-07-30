@@ -18,12 +18,13 @@ At the time of me writing this, we have the MVP, we can:
 - select cells
 - write / delete cells
 - save the file
+- copy / paste (works accross other editors)
+- undo / redo
 
 ### Incoming features
 
 This readme is mostly for me to track the things I want to add:
 
-- undo / redo
 - formulas
 - menu with with actions
   - search

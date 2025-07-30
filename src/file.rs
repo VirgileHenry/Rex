@@ -1,6 +1,7 @@
 use std::collections::BTreeMap;
 
 mod cell;
+mod change_history;
 mod command;
 mod input_buffer;
 mod state;
@@ -21,9 +22,10 @@ const SELECTED: ratatui::style::Color = ratatui::style::Color::Indexed(62);
 pub struct FileApp {
     path: std::path::PathBuf,
     saved: bool,
-    content: BTreeMap<cell::CellIndex, cell::Cell>,
     viewport: viewport::FileViewport,
     state: state::State,
+    content: BTreeMap<cell::CellIndex, cell::Cell>,
+    changes: change_history::ChangeHistory,
 }
 
 impl FileApp {
@@ -33,9 +35,10 @@ impl FileApp {
         Ok(FileApp {
             path: path.to_owned(),
             saved: true,
-            content,
             viewport: viewport::FileViewport::new(ratatui::layout::Rect::ZERO),
             state: state::State::Idle,
+            content,
+            changes: change_history::ChangeHistory::new(),
         })
     }
 
@@ -82,68 +85,6 @@ impl FileApp {
         std::fs::write(&self.path, &content)?;
 
         Ok(bytes_count)
-    }
-
-    pub fn execute_command(&mut self, cmd: command::Command, info: &mut String) {
-        match cmd {
-            command::Command::WriteCells {
-                cells,
-                content,
-                next_selection,
-            } => {
-                for cell_x in cells.x..cells.x + cells.width {
-                    for cell_y in cells.y..cells.y + cells.height {
-                        let key = cell::CellIndex::new(cell_x, cell_y);
-                        self.content.insert(key, content.clone());
-                    }
-                }
-                self.viewport.selection = match next_selection {
-                    command::SelectionDirection::Stay => Some(cells),
-                    command::SelectionDirection::Next => Some(cell::CellRect::new(
-                        cells.x.saturating_add(cells.width),
-                        cells.y,
-                        cells.width,
-                        cells.height,
-                    )),
-                    command::SelectionDirection::Return => Some(cell::CellRect::new(
-                        cells.x,
-                        cells.y.saturating_add(cells.height),
-                        cells.width,
-                        cells.height,
-                    )),
-                };
-                self.saved = false;
-                *info = format!("Wrote {cells} ({} cells)", cells.count());
-            }
-            command::Command::DeleteCells {
-                cells,
-                next_selection,
-            } => {
-                for cell_x in cells.x..cells.x + cells.width {
-                    for cell_y in cells.y..cells.y + cells.height {
-                        self.content.remove(&cell::CellIndex::new(cell_x, cell_y));
-                    }
-                }
-                self.viewport.selection = match next_selection {
-                    command::SelectionDirection::Stay => Some(cells),
-                    command::SelectionDirection::Next => Some(cell::CellRect::new(
-                        cells.x.saturating_add(cells.width),
-                        cells.y,
-                        cells.width,
-                        cells.height,
-                    )),
-                    command::SelectionDirection::Return => Some(cell::CellRect::new(
-                        cells.x,
-                        cells.y.saturating_add(cells.height),
-                        cells.width,
-                        cells.height,
-                    )),
-                };
-                self.saved = false;
-                *info = format!("Deleted {cells} ({} cells)", cells.count());
-            }
-            command::Command::RedrawRequest => { /* bubble up, but nothing to do */ }
-        }
     }
 
     pub fn update_content_area(&mut self, content_area: ratatui::layout::Rect) {
@@ -308,6 +249,37 @@ impl crate::event::EventHandler for FileApp {
                     }
                     Some(command::Command::RedrawRequest)
                 }
+                (
+                    Event::Key(KeyEvent {
+                        kind: KeyEventKind::Press,
+                        code: KeyCode::Char('c'),
+                        modifiers: KeyModifiers::CONTROL,
+                        ..
+                    }),
+                    Some(cells),
+                ) => Some(command::Command::CopyCells { cells }),
+                (Event::Paste(paste_buffer), Some(cells)) => Some(command::Command::PasteCells {
+                    cells,
+                    paste_buffer,
+                }),
+                (
+                    Event::Key(KeyEvent {
+                        kind: KeyEventKind::Press,
+                        code: KeyCode::Char('z'),
+                        modifiers: KeyModifiers::CONTROL,
+                        ..
+                    }),
+                    _,
+                ) => Some(command::Command::Undo),
+                (
+                    Event::Key(KeyEvent {
+                        kind: KeyEventKind::Press,
+                        code: KeyCode::Char('y'),
+                        modifiers: KeyModifiers::CONTROL,
+                        ..
+                    }),
+                    _,
+                ) => Some(command::Command::Redo),
                 // when cells are selected and we press any writing chars, enter editing
                 (
                     Event::Key(KeyEvent {
@@ -351,7 +323,7 @@ impl crate::event::EventHandler for FileApp {
                         None
                     }
                 }
-                // cells selected and supr / backspace, delete selected cells
+                // cells selected and suppr / backspace, delete selected cells
                 (
                     Event::Key(KeyEvent {
                         kind: KeyEventKind::Press,
@@ -363,10 +335,6 @@ impl crate::event::EventHandler for FileApp {
                     cells,
                     next_selection: command::SelectionDirection::Stay,
                 }),
-                (Event::Paste(val), Some(_cells)) => {
-                    *info = format!("Pasted {} bytes", val.bytes().len());
-                    Some(command::Command::RedrawRequest)
-                }
 
                 // Lastly, we can redirect the event to the viewport control
                 (other, _) => self.viewport.handle_event(other, info),
